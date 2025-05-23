@@ -194,21 +194,28 @@
                 @php $receiptsOpen = request()->routeIs('receipts.*') ? 'true' : 'false'; @endphp
 
                 <div x-data="{ open: {{ $receiptsOpen }} }" class="space-y-1">
-                    <button @click="open = !open"
-                        class="w-full flex items-center justify-between py-2 px-3 rounded transition focus:outline-none
-            {{ request()->routeIs('receipts.*') ? 'bg-gray-700 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
+                    <button @click="open = !open" class="w-full flex items-center justify-between py-2 px-3 rounded transition focus:outline-none
+            {{ request()->routeIs('receipts.*')
+                ? 'bg-gray-700 text-white'
+                : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
                         <span>Receipts</span>
-                        <svg :class="{ 'rotate-180': open }" class="h-4 w-4 transform transition-transform" …>…</svg>
+                        <svg :class="{ 'rotate-180': open }" class="h-4 w-4 transform transition-transform"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
                     </button>
+
                     <div x-show="open" x-collapse x-cloak class="space-y-1 pl-6">
-                        <a href="{{ route('receipts.index') }}"
-                            class="block py-2 px-3 rounded transition
-         {{ request()->routeIs('receipts.index') ? 'bg-gray-700 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
+                        <a href="{{ route('receipts.index') }}" class="block py-2 px-3 rounded transition
+                {{ request()->routeIs('receipts.index')
+                    ? 'bg-gray-700 text-white'
+                    : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
                             All Receipts
                         </a>
-                        <a href="{{ route('receipts.create') }}"
-                            class="block py-2 px-3 rounded transition
-         {{ request()->routeIs('receipts.create') ? 'bg-gray-700 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
+                        <a href="{{ route('receipts.create') }}" class="block py-2 px-3 rounded transition
+                {{ request()->routeIs('receipts.create')
+                    ? 'bg-gray-700 text-white'
+                    : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
                             Generate Receipt
                         </a>
                     </div>

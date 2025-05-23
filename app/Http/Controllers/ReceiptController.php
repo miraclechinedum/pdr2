@@ -21,6 +21,9 @@ use App\Mail\NewUserCredentials;
 use Illuminate\Support\Facades\Mail;
 
 use App\Services\AuditService;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
 
 class ReceiptController extends Controller
 {

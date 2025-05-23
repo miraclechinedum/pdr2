@@ -9,11 +9,15 @@ use App\Http\Controllers\ProductCategoryController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ReceiptController;
 use App\Http\Controllers\MyProductsController;
+use App\Http\Controllers\SelfServiceController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', function () {
-    return view('welcome');
-});
+// show the welcome lookup form
+Route::view('/', 'welcome')->name('home');
+
+// handle lookup form → display result
+Route::get('/lookup/{serial}', [SelfServiceController::class, 'show'])
+    ->name('lookup.result');
 
 Route::get('/dashboard', function () {
     return view('dashboard');

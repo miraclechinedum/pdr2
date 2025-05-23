@@ -140,6 +140,28 @@
 
 @push('scripts')
 <script>
+    // 1) make alert helper available immediately
+  function showAjaxAlert(type, message) {
+    const colors = {
+      success: 'bg-green-100 text-green-800',
+      error:   'bg-red-100 text-red-800'
+    };
+    $('#ajax-alert')
+      .html(`<div class="p-3 rounded ${colors[type]}">${message}</div>`)
+      .removeClass('hidden')
+      .fadeIn()
+      .delay(3000)
+      .fadeOut()
+      .queue(() => $('#ajax-alert').addClass('hidden'));
+  }
+
+  // 2) tell jQuery to always send Laravel's CSRF token
+  $.ajaxSetup({
+    headers: {
+      'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
+    }
+  });
+  
     // capture Alpine instance so jQuery can reach it
   let transferWizardInstance;
 

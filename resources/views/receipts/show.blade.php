@@ -48,6 +48,7 @@
                     <th class="px-4 py-2 text-left">Serial Number</th>
                     <th class="px-4 py-2 text-left">Business Name</th>
                     <th class="px-4 py-2 text-left">Branch Name</th>
+                    <th class="px-4 py-2 text-left">Status</th>
                 </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-100">
@@ -68,6 +69,11 @@
                     <td class="px-4 py-2 align-top">{{ $product->unique_identifier }}</td>
                     <td class="px-4 py-2 align-top">{{ $business->business_name ?? 'N/A' }}</td>
                     <td class="px-4 py-2 align-top">{{ $branch->branch_name ?? 'N/A' }}</td>
+                    <td class="px-4 py-2 align-top">
+                        @if($item->status === 'transferred')
+                        <span class="font-bold text-red-600">{{ ucfirst($item->status) }}</span>
+                        @endif
+                    </td>
                 </tr>
                 <tr class="details-row hidden bg-gray-50">
                     <td colspan="6" class="px-6 py-4 text-sm text-gray-700">

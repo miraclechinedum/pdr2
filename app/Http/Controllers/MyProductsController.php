@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Receipt;
+use App\Models\Product;
 use App\Models\ReceiptProduct;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -11,6 +12,10 @@ use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use Illuminate\Support\Str;
 use Yajra\DataTables\Facades\DataTables;
+
+use App\Services\AuditService;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\NewUserCredentials;
 
 class MyProductsController extends Controller
 {
@@ -68,56 +73,77 @@ class MyProductsController extends Controller
     public function transferBatch(Request $request)
     {
         $data = $request->validate([
-            'new_owner_nin' => ['required', 'digits:11'],
-            'customer_name' => 'required|string',
-            'customer_email' => ['required', 'email'],
-            'customer_phone' => ['required', 'digits:11'],
+            'new_owner_nin'    => ['required', 'digits:11'],
+            'customer_name'    => 'required|string',
+            'customer_email'   => ['required', 'email'],
+            'customer_phone'   => ['required', 'digits:11'],
             'customer_address' => 'required|string',
             'customer_state_id' => 'required|exists:states,id',
-            'customer_lga_id' => 'required|exists:lgas,id',
-            'products' => 'required|array|min:1',
-            'products.*' => 'exists:products,id',
+            'customer_lga_id'  => 'required|exists:lgas,id',
+            'products'         => 'required|array|min:1',
+            'products.*'       => 'exists:products,id',
         ]);
 
         Log::debug('TransferBatch payload', $data);
 
-        // 1) find or create new customer
+        // 1) find or create the new customer
         $customer = User::firstOrCreate(
             ['nin' => $data['new_owner_nin']],
             [
-                'name' => $data['customer_name'],
-                'email' => $data['customer_email'],
+                'name'         => $data['customer_name'],
+                'email'        => $data['customer_email'],
                 'phone_number' => $data['customer_phone'],
-                'address' => $data['customer_address'],
-                'state_id' => $data['customer_state_id'],
-                'lga_id' => $data['customer_lga_id'],
-                'password' => bcrypt(Str::random(12)),
+                'address'      => $data['customer_address'],
+                'state_id'     => $data['customer_state_id'],
+                'lga_id'       => $data['customer_lga_id'],
+                // generate a random password
+                'password'     => bcrypt($plain = Str::random(12)),
             ]
         );
-        $customer->assignRole('Customer');
+
+        // if newly created, assign role and email credentials
+        if ($customer->wasRecentlyCreated) {
+            $customer->assignRole('Customer');
+            // send credentials
+            Mail::to($customer->email)
+                ->queue(new NewUserCredentials($customer, $plain));
+        } else {
+            $customer->assignRole('Customer');
+        }
 
         // 2) mark old as transferred
         ReceiptProduct::whereIn('product_id', $data['products'])
             ->where('status', 'active')
             ->update(['status' => 'transferred']);
 
-        // 3) new receipt to new owner
+        // 3) create a new receipt
         $receipt = Receipt::create([
             'customer_id' => $customer->id,
-            'seller_id' => Auth::id(),
+            'seller_id'   => Auth::id(),
         ]);
 
-        foreach ($data['products'] as $pid) {
+        // 4) attach each product and audit‐log the transfer
+        foreach ($data['products'] as $prodId) {
             ReceiptProduct::create([
                 'receipt_id' => $receipt->id,
-                'product_id' => $pid,
-                'quantity' => 1,
-                'status' => 'active',
+                'product_id' => $prodId,
+                'quantity'   => 1,
+                'status'     => 'active',
             ]);
+
+            $p = Product::findOrFail($prodId);
+
+            AuditService::log(
+                'product_transferred',
+                Auth::user()->name
+                    . ' (' . Auth::user()->phone_number . ') transferred '
+                    . $p->name . ' (' . $p->unique_identifier . ') to '
+                    . $customer->name . ' (' . $customer->phone_number . ')'
+            );
         }
 
         return response()->json([
-            'success' => true,
+            'success'          => true,
             'reference_number' => $receipt->reference_number,
         ], 201);
     }

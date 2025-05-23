@@ -62,9 +62,13 @@
                 </p>
             </div>
             <div class="search-con">
-                <form action="">
-                    <form class=""><input placeholder="Type product serial number" type="text" class="form-control"
-                            value=""><button type="submit" class="search-btn btn btn-primary">Lookup</button></form>
+                <form action="{{ route('lookup.result','__serial__') }}" method="get"
+                    onsubmit="this.action=this.action.replace('__serial__', encodeURIComponent(this.serial.value))">
+                    <input name="serial" placeholder="Type product serial number" type="text" class="form-control"
+                        required>
+                    <button type="submit" class="search-btn btn btn-primary">
+                        Lookup
+                    </button>
                 </form>
             </div>
         </div>
