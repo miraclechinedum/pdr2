@@ -35,74 +35,25 @@ class ReceiptController extends Controller
         return view('receipts.index');
     }
 
-    public function data(Request $request)
+    public function data()
     {
         $user = Auth::user();
-
-        // Base query with needed relationships
         $query = Receipt::with(['seller', 'customer']);
 
-        // 1) Admin or Police see all receipts
-        if ($user->hasAnyRole(['Admin', 'Police'])) {
-            // no extra constraints
-        }
-        // 2) Business Owner: receipts from sales in their businesses OR receipts where they are the customer
-        elseif ($user->hasRole('Business Owner')) {
-            // assume Business model has owner_id → user.id
-            $bizIds = $user->businesses()->pluck('id');
-            $query->where(function ($q) use ($bizIds, $user) {
-                // receipts where at least one sold product belongs to one of their businesses
-                $q->whereHas('products.product', function ($q2) use ($bizIds) {
-                    $q2->whereIn('business_id', $bizIds);
-                })
-                    // OR receipts where they themselves are the customer
-                    ->orWhere('customer_id', $user->id);
-            });
-        }
-        // 3) Business Staff: receipts they generated (as seller) OR receipts where they are the customer
-        elseif ($user->hasRole('Business Staff')) {
-            $query->where(function ($q) use ($user) {
-                $q->where('seller_id', $user->id)
-                    ->orWhere('customer_id', $user->id);
-            });
-        }
-        // 4) Customer: only receipts generated for them
-        elseif ($user->hasRole('Customer')) {
-            $query->where('customer_id', $user->id);
-        }
-        // 5) Fallback: nobody else sees anything
-        else {
-            $query->whereRaw('0 = 1');
+        if ($user->hasRole('Admin')) {
+            // do nothing, show all
+        } elseif ($user->hasRole('Business')) {
+            $query->where('seller_id', $user->id);
+        } elseif ($user->hasRole('Business Staff')) {
+            $query->where('seller_id', $user->business_id);
         }
 
-        return DataTables::of($query)
-            ->addColumn('uuid', fn($r) => $r->uuid)
+        return DataTables::eloquent($query)
             ->addColumn('reference', fn($r) => $r->reference_number)
-            ->addColumn('seller', fn($r) => $r->seller->name)
-            ->addColumn('customer', fn($r) => $r->customer->name . ' | ' . $r->customer->nin)
-            ->addColumn('date', fn($r) => $r->created_at->format('jS F, Y g:ia'))
-            ->addColumn('actions', function ($r) {
-                return '<a href="' . route('receipts.show', $r->uuid)
-                    . '" class="btn-view text-blue-600">View</a>';
-            })
-            ->filterColumn('reference', function ($query, $keyword) {
-                $query->where('reference_number', 'like', "%{$keyword}%");
-            })
-            ->filterColumn('seller', function ($query, $keyword) {
-                $query->whereHas(
-                    'seller',
-                    fn($q) =>
-                    $q->where('name', 'like', "%{$keyword}%")
-                );
-            })
-            ->filterColumn('customer', function ($query, $keyword) {
-                $query->whereHas(
-                    'customer',
-                    fn($q) =>
-                    $q->where('name', 'like', "%{$keyword}%")
-                        ->orWhere('nin', 'like', "%{$keyword}%")
-                );
-            })
+            ->addColumn('seller', fn($r) => optional($r->seller)->name ?? 'N/A')
+            ->addColumn('customer', fn($r) => optional($r->customer)->name ?? 'N/A')
+            ->addColumn('date', fn($r) => $r->created_at->format('Y-m-d'))
+            ->addColumn('actions', fn($r) => '...') // Your action buttons
             ->rawColumns(['actions'])
             ->make(true);
     }
