@@ -21,6 +21,9 @@ use App\Mail\NewUserCredentials;
 use Illuminate\Support\Facades\Mail;
 
 use App\Services\AuditService;
+use App\Models\Pricing;
+use App\Models\Wallet;
+use Yabacon\Paystack;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -34,56 +37,74 @@ class ReceiptController extends Controller
 
     public function data(Request $request)
     {
-        try {
-            Log::debug('ReceiptController@data: start');
+        $user = Auth::user();
 
-            $query = Receipt::with(['seller', 'customer']);
+        // Base query with needed relationships
+        $query = Receipt::with(['seller', 'customer']);
 
-            return DataTables::of($query)
-                // S/N column is handled in JS drawCallback
-                ->addColumn('uuid', fn($r) => $r->uuid)
-                ->addColumn('reference', fn($r) => $r->reference_number)
-                ->addColumn('seller', fn($r) => $r->seller->name)
-                ->addColumn('customer', fn($r) => $r->customer->name . ' | ' . $r->customer->nin)
-                // New date format: e.g. "12th May, 2023 8:56pm"
-                ->addColumn('date', fn($r) => $r->created_at->format('jS F, Y g:ia'))
-                ->addColumn('actions', function ($r) {
-                    return '<a href="' . route('receipts.show', $r->uuid)
-                        . '" class="btn-view text-blue-600">View</a>';
-                })
-
-                // Enable searching on the reference_number column
-                ->filterColumn('reference', function ($query, $keyword) {
-                    $query->where('reference_number', 'like', "%{$keyword}%");
-                })
-
-                // Enable searching on seller name
-                ->filterColumn('seller', function ($query, $keyword) {
-                    $query->whereHas(
-                        'seller',
-                        fn($q) =>
-                        $q->where('name', 'like', "%{$keyword}%")
-                    );
-                })
-
-                // Enable searching on customer name or NIN
-                ->filterColumn('customer', function ($query, $keyword) {
-                    $query->whereHas(
-                        'customer',
-                        fn($q) =>
-                        $q->where('name', 'like', "%{$keyword}%")
-                            ->orWhere('nin', 'like', "%{$keyword}%")
-                    );
-                })
-
-                ->rawColumns(['actions'])
-                ->make(true);
-        } catch (\Throwable $e) {
-            Log::error('ReceiptController@data ERROR: ' . $e->getMessage());
-            return response()->json([
-                'error' => 'Server error, please check logs.'
-            ], 500);
+        // 1) Admin or Police see all receipts
+        if ($user->hasAnyRole(['Admin', 'Police'])) {
+            // no extra constraints
         }
+        // 2) Business Owner: receipts from sales in their businesses OR receipts where they are the customer
+        elseif ($user->hasRole('Business Owner')) {
+            // assume Business model has owner_id → user.id
+            $bizIds = $user->businesses()->pluck('id');
+            $query->where(function ($q) use ($bizIds, $user) {
+                // receipts where at least one sold product belongs to one of their businesses
+                $q->whereHas('products.product', function ($q2) use ($bizIds) {
+                    $q2->whereIn('business_id', $bizIds);
+                })
+                    // OR receipts where they themselves are the customer
+                    ->orWhere('customer_id', $user->id);
+            });
+        }
+        // 3) Business Staff: receipts they generated (as seller) OR receipts where they are the customer
+        elseif ($user->hasRole('Business Staff')) {
+            $query->where(function ($q) use ($user) {
+                $q->where('seller_id', $user->id)
+                    ->orWhere('customer_id', $user->id);
+            });
+        }
+        // 4) Customer: only receipts generated for them
+        elseif ($user->hasRole('Customer')) {
+            $query->where('customer_id', $user->id);
+        }
+        // 5) Fallback: nobody else sees anything
+        else {
+            $query->whereRaw('0 = 1');
+        }
+
+        return DataTables::of($query)
+            ->addColumn('uuid', fn($r) => $r->uuid)
+            ->addColumn('reference', fn($r) => $r->reference_number)
+            ->addColumn('seller', fn($r) => $r->seller->name)
+            ->addColumn('customer', fn($r) => $r->customer->name . ' | ' . $r->customer->nin)
+            ->addColumn('date', fn($r) => $r->created_at->format('jS F, Y g:ia'))
+            ->addColumn('actions', function ($r) {
+                return '<a href="' . route('receipts.show', $r->uuid)
+                    . '" class="btn-view text-blue-600">View</a>';
+            })
+            ->filterColumn('reference', function ($query, $keyword) {
+                $query->where('reference_number', 'like', "%{$keyword}%");
+            })
+            ->filterColumn('seller', function ($query, $keyword) {
+                $query->whereHas(
+                    'seller',
+                    fn($q) =>
+                    $q->where('name', 'like', "%{$keyword}%")
+                );
+            })
+            ->filterColumn('customer', function ($query, $keyword) {
+                $query->whereHas(
+                    'customer',
+                    fn($q) =>
+                    $q->where('name', 'like', "%{$keyword}%")
+                        ->orWhere('nin', 'like', "%{$keyword}%")
+                );
+            })
+            ->rawColumns(['actions'])
+            ->make(true);
     }
 
     public function show(Request $req, Receipt $receipt)
@@ -204,6 +225,42 @@ class ReceiptController extends Controller
             Mail::to($customer->email)
                 ->send(new NewUserCredentials($customer, $plain));
         }
+
+        $pricing = Pricing::where('slug', 'receipt-generation')
+            ->where('is_active', true)
+            ->firstOrFail();
+
+        $fee = $pricing->amount; // 900.00 for example
+
+        // 2) Check seller’s wallet balance
+        $seller = Auth::user();
+        $totalCredit = $seller->wallets()
+            ->where('type', 'credit')
+            ->where('status', 'success')
+            ->sum('amount');
+        $totalDebit = $seller->wallets()
+            ->where('type', 'debit')
+            ->where('status', 'success')
+            ->sum('amount');
+
+        $balance = $totalCredit - $totalDebit;
+
+        if ($balance < $fee) {
+            // abort or return JSON error for insufficient funds
+            return back()->withErrors([
+                'wallet' => 'Insufficient wallet balance (need ₦' . number_format($fee, 2) . ')'
+            ]);
+        }
+
+        // 3) Deduct the fee immediately
+        Wallet::create([
+            'user_id'   => $seller->id,
+            'amount'    => $fee,
+            'type'      => 'debit',
+            'status'    => 'success',
+        ]);
+
+        Log::info("Deducted ₦{$fee} from user {$seller->id} for receipt generation");
 
         // 3) Now create the receipt
         $receipt = Receipt::create([

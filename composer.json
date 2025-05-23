@@ -13,6 +13,7 @@
         "maatwebsite/excel": "^1.1",
         "simplesoftwareio/simple-qrcode": "^4.2",
         "spatie/laravel-permission": "^6.17",
+        "yabacon/paystack-php": "^2.2",
         "yajra/laravel-datatables-oracle": "^12.2"
     },
     "require-dev": {

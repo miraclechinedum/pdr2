@@ -15,6 +15,7 @@
 </div>
 @endif
 
+
 <div class="bg-white p-6 rounded-lg shadow">
   <table id="receipts-table" class="min-w-full">
     <thead>

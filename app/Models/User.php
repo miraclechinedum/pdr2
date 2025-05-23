@@ -114,4 +114,25 @@ class User extends Authenticatable
             ->join('users as sellers', 'receipts.seller_id',         '=', 'sellers.id')
             ->where('receipts.customer_id', $this->id);
     }
+
+    /**
+     * All wallet transactions for this user.
+     */
+    public function wallets()
+    {
+        return $this->hasMany(Wallet::class, 'user_id');
+    }
+
+    // App\Models\User.php
+
+    public function businesses()
+    {
+        // for Business Owner role; adjust if your Business table uses a different column name
+        return $this->hasMany(Business::class, 'owner_id');
+    }
+
+    public function hasRole($role)
+    {
+        return $this->roles->pluck('name')->contains($role);
+    }
 }

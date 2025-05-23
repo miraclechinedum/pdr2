@@ -10,6 +10,8 @@ use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ReceiptController;
 use App\Http\Controllers\MyProductsController;
 use App\Http\Controllers\SelfServiceController;
+use App\Http\Controllers\PricingController;
+use App\Http\Controllers\WalletController;
 use Illuminate\Support\Facades\Route;
 
 // show the welcome lookup form
@@ -124,6 +126,23 @@ Route::middleware(['auth'])->group(function () {
 
 
     Route::get('/users/by-nin/{nin}', [UsersController::class, 'findByNin']);
+
+    Route::get('/config/pricing', [PricingController::class, 'index'])
+        ->name('pricing.index');
+    Route::get('/config/pricing/data', [PricingController::class, 'data'])
+        ->name('pricing.data');
+    Route::post('/config/pricing', [PricingController::class, 'store'])
+        ->name('pricing.store');
+    Route::put('/config/pricing/{pricing}', [PricingController::class, 'update'])
+        ->name('pricing.update');
+    Route::patch('config/pricing/{pricing}/toggle', [PricingController::class, 'toggle'])
+        ->name('pricing.toggle');
+
+    // Fund Wallet menu
+    Route::get('/wallet',              [WalletController::class, 'index'])->name('wallet.index');
+    Route::get('/wallet/data',         [WalletController::class, 'data'])->name('wallet.data');
+    Route::post('/wallet/initialize',  [WalletController::class, 'initialize'])->name('wallet.initialize');
+    Route::get('/wallet/callback',     [WalletController::class, 'callback'])->name('wallet.callback');
 });
 
 require __DIR__ . '/auth.php';

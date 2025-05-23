@@ -221,6 +221,58 @@
                     </div>
                 </div>
 
+                {{-- ↓ START App Configuration menu ↓ --}}
+                @php
+                // expand when on pricing.* routes
+                $configOpen = request()->routeIs('pricing.*') ? 'true' : 'false';
+                @endphp
+
+                <div x-data="{ open: {{ $configOpen }} }" class="space-y-1">
+                    <button @click="open = !open" class="w-full flex items-center justify-between py-2 px-3 rounded transition focus:outline-none
+            {{ request()->routeIs('pricing.*')
+                ? 'bg-gray-700 text-white'
+                : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
+                        <span>App Configuration</span>
+                        <svg :class="{ 'rotate-180': open }" class="h-4 w-4 transform transition-transform"
+                            xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </button>
+
+                    <div x-show="open" x-collapse x-cloak class="space-y-1 pl-6">
+                        <a href="{{ route('pricing.index') }}" class="block py-2 px-3 rounded transition
+               {{ request()->routeIs('pricing.index')
+                   ? 'bg-gray-700 text-white'
+                   : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
+                            Pricing Setup
+                        </a>
+                        {{-- add more config items here as needed --}}
+                    </div>
+                </div>
+                {{-- ↑ END App Configuration menu ↑ --}}
+
+                {{-- <a href="{{ route('dashboard') }}" class="block py-2 px-3 rounded transition
+             {{ request()->routeIs('dashboard')
+                 ? 'bg-gray-500 text-white'
+                 : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
+                    Dashboard
+                </a> --}}
+
+                {{-- @php $walletOpen = request()->routeIs('wallet.*') ? 'true' : 'false'; @endphp
+                <div x-data="{ open: {{ $walletOpen }} }" class="space-y-1">
+                    <button @click="open = !open" class="...">
+                        <span>Wallet</span>
+                        <svg :class="{ 'rotate-180': open }" ...>…</svg>
+                    </button>
+                    <div x-show="open" x-collapse x-cloak class="pl-6 space-y-1"> --}}
+                        <a href="{{ route('wallet.index') }}"
+                            class="block py-2 px-3 rounded transition
+         {{ request()->routeIs('wallet.index*') ? 'bg-gray-700 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
+                            Fund Wallet
+                        </a>
+                        {{--
+                    </div>
+                </div> --}}
 
             </nav>
         </aside>

@@ -8,6 +8,7 @@
     --black: #000;
     --white: #fff;
     --blue: #3b82f6;
+    --warning: #f7c600;
     --blue-peach: #a4b8ec;
     --font-family: "Bai Jamjuree", sans-serif;
 }
@@ -91,9 +92,18 @@ button:disabled {
     background: var(--white);
 }
 
+.edit-btn {
+    border: 3px solid green;
+}
+
 .btn-primary {
     color: var(--white);
     background-color: var(--grey);
+}
+
+.btn-warning {
+    color: var(--white);
+    background-color: var(--warning);
 }
 
 header .top-header {
