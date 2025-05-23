@@ -79,22 +79,22 @@
             <h2>Why use PDR</h2>
             <div class="features">
                 <div class="feature">
-                    <div class="icon"><img src="/src/assets/images/public.svg" alt="Logo"></div>
+                    <div class="icon"><img src="{{ asset('images/public.svg') }}" alt="Logo"></div>
                     <h3>FREE for Public Use</h3>
                     <p>Create a secure inventory of all your treasured possessions in one place.</p>
                 </div>
                 <div class="feature">
-                    <div class="icon"><img src="/src/assets/images/search.svg" alt="Logo"></div>
+                    <div class="icon"><img src="{{ asset('images/search.svg') }}" alt="Logo"></div>
                     <h3>Searchable by Police</h3>
                     <p>Loss and theft alerts are immediately visible on police systems.</p>
                 </div>
                 <div class="feature">
-                    <div class="icon"><img src="/src/assets/images/recover.svg" alt="Logo"></div>
+                    <div class="icon"><img src="{{ asset('images/search.svg') }}" alt="Logo"></div>
                     <h3>Recover your Valuables</h3>
                     <p>If your registered items are recovered by police they are able to return them.</p>
                 </div>
                 <div class="feature">
-                    <div class="icon"><img src="/src/assets/images/owner.svg" alt="Logo"></div>
+                    <div class="icon"><img src="{{ asset('images/owner.svg') }}" alt="Logo"></div>
                     <h3>Ownership Certificates</h3>
                     <p>Download property details to help make insurance claims and police reports easier.</p>
                 </div>
