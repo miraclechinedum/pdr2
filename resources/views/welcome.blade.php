@@ -79,34 +79,37 @@
             <h2>Why use PDR</h2>
             <div class="features">
                 <div class="feature">
-                    <div class="icon" style="background: black">
+                    <<<<<<< HEAD <div class="icon" style="background: black">
                         <img src={{ asset("images/images/public.svg")}} alt="">
-                    </div>
-                    <h3>FREE for Public Use</h3>
-                    <p>Create a secure inventory of all your treasured possessions in one place.</p>
                 </div>
-                <div class="feature">
-                    <div class="icon" style="background: black">
-                        <img src={{ asset("images/images/search.svg")}} alt="">
-                    </div>
-                    <h3>Searchable by Police</h3>
-                    <p>Loss and theft alerts are immediately visible on police systems.</p>
-                </div>
-                <div class="feature">
-                    <div class="icon" style="background: black">
-                        <img src={{ asset("images/images/recover.svg")}} alt="">
-                    </div>
-                    <h3>Recover your Valuables</h3>
-                    <p>If your registered items are recovered by police they are able to return them.</p>
-                </div>
-                <div class="feature">
-                    <div class="icon" style="background: black">
-                        <img src={{ asset("images/images/owner.svg")}} alt="">
-                    </div>
-                    <h3>Ownership Certificates</h3>
-                    <p>Download property details to help make insurance claims and police reports easier.</p>
-                </div>
+                =======
+                <div class="icon"><img src="{{ asset('images/public.svg') }}" alt="Logo"></div>
+                >>>>>>> f75dd59315928b1b0bbb56efa50511bfe2129474
+                <h3>FREE for Public Use</h3>
+                <p>Create a secure inventory of all your treasured possessions in one place.</p>
             </div>
+            <div class="feature">
+                <div class="icon" style="background: black">
+                    <img src={{ asset("images/images/search.svg")}} alt="">
+                </div>
+                <h3>Searchable by Police</h3>
+                <p>Loss and theft alerts are immediately visible on police systems.</p>
+            </div>
+            <div class="feature">
+                <div class="icon" style="background: black">
+                    <img src={{ asset("images/images/recover.svg")}} alt="">
+                </div>
+                <h3>Recover your Valuables</h3>
+                <p>If your registered items are recovered by police they are able to return them.</p>
+            </div>
+            <div class="feature">
+                <div class="icon" style="background: black">
+                    <img src={{ asset("images/images/owner.svg")}} alt="">
+                </div>
+                <h3>Ownership Certificates</h3>
+                <p>Download property details to help make insurance claims and police reports easier.</p>
+            </div>
+        </div>
         </div>
     </section>
 
