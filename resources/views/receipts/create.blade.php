@@ -85,7 +85,7 @@
     </div>
   </div>
 
-  {{-- inside your Step 3 sale‐details div: --}}
+  {{-- Step 3: Sale Details --}}
   <div x-show="step === 3" class="space-y-4">
     <h2 class="font-semibold">Sale Details</h2>
 
@@ -128,7 +128,6 @@
       Add to Cart
     </button>
 
-
     {{-- Cart preview --}}
     <template x-if="cart.length">
       <div class="mt-4">
@@ -169,10 +168,27 @@
       <button @click="submitCart()" type="button" class="px-4 py-2 bg-green-600 text-white rounded"
         :disabled="isSubmitting || !cart.length" x-text="isSubmitting ? 'Generating…' : 'Generate'">
       </button>
-
     </div>
   </div>
 
+  {{-- Confirmation Modal --}}
+  <div x-show="showConfirm" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-cloak>
+    <div class="bg-white rounded-2xl shadow-lg max-w-sm w-full p-6 space-y-4">
+      <h2 class="text-lg font-semibold">Confirm Deduction</h2>
+      <p>
+        ₦<span x-text="fee.toLocaleString(undefined, { minimumFractionDigits: 2 })"></span>
+        will be deducted from your wallet.
+      </p>
+      <div class="flex justify-end space-x-2">
+        <button @click="showConfirm = false" class="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">
+          Cancel
+        </button>
+        <button @click="confirmAndSubmit()" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">
+          OK
+        </button>
+      </div>
+    </div>
+  </div>
 
 </div>
 @endsection
@@ -193,16 +209,18 @@
 
       isStaff: @json(Auth::user()->hasRole('Business Staff')),
       staffBusinessId: @json(optional(Auth::user()->businessStaff)->business_id),
-      staffBranchId:   @json(optional(Auth::user()->businessStaff)->branch_id),
+      staffBranchId: @json(optional(Auth::user()->businessStaff)->branch_id),
 
       businessId: null,
-      branchId:   null,
-      branches:   [],
+      branchId: null,
+      branches: [],
       allBranches: @json($allBranches),
-      products:  @json($products),
+      products: @json($products),
       filteredProducts: [],
       selectedProducts: [],
-       isSubmitting: false,
+      fee: @json($fee),      // ← injected fee
+      isSubmitting: false,
+      showConfirm: false,    // ← controls the confirmation modal
 
       get availableBusinesses() {
         if (this.isStaff) {
@@ -232,7 +250,7 @@
         });
       },
 
-      checkNin() {
+   checkNin() {
         if (!this.nin.trim()) {
           this.errorNin = 'Please enter a NIN';
           return;
@@ -353,8 +371,7 @@
     });
 },
 
-
-filterProducts() {
+     filterProducts() {
   // 1) start with products for this business/branch
   let list = this.products.filter(p =>
     p.business_id == this.businessId &&
@@ -438,84 +455,80 @@ filterProducts() {
       this.cart.splice(idx,1);
     },
 
+      submitCart() {
+        // open confirmation modal instead of immediate submit
+        this.showConfirm = true;
+      },
 
-submitCart() {
-this.isSubmitting = true;
+      confirmAndSubmit() {
+        // user confirmed, proceed with actual submission
+        this.showConfirm = false;
+        this.isSubmitting = true;
 
-const fd = new FormData();
-fd.append('customer_nin', this.nin);
-fd.append('customer_name', this.name);
-fd.append('customer_email', this.email);
-fd.append('customer_phone', this.phone);
-fd.append('customer_address', this.address);
-fd.append('customer_state_id', this.stateId);
-fd.append('customer_lga_id', this.lgaId);
+        const fd = new FormData();
+        fd.append('customer_nin', this.nin);
+        fd.append('customer_name', this.name);
+        fd.append('customer_email', this.email);
+        fd.append('customer_phone', this.phone);
+        fd.append('customer_address', this.address);
+        fd.append('customer_state_id', this.stateId);
+        fd.append('customer_lga_id', this.lgaId);
 
-this.cart.forEach((entry, i) => {
-fd.append(`batches[${i}][business_id]`, entry.businessId);
-fd.append(`batches[${i}][branch_id]`, entry.branchId ?? '');
-entry.products.forEach(pid =>
-fd.append(`batches[${i}][products][]`, pid)
-);
-});
+        this.cart.forEach((entry, i) => {
+          fd.append(`batches[${i}][business_id]`, entry.businessId);
+          fd.append(`batches[${i}][branch_id]`, entry.branchId ?? '');
+          entry.products.forEach(pid =>
+            fd.append(`batches[${i}][products][]`, pid)
+          );
+        });
 
-fetch('{{ route("receipts.store") }}', {
-method: 'POST',
-headers: {
-'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-'Accept': 'application/json',
-'X-Requested-With':'XMLHttpRequest',
-},
-body: fd,
-})
-.then(async response => {
-const text = await response.text();
-let data;
-try {
-data = JSON.parse(text);
-} catch {
-console.error('Expected JSON but got:', text);
-throw new Error('Server returned HTML—check Laravel log for the real error.');
-}
-if (!response.ok) {
-console.error('Error payload:', data);
-throw new Error(data.error || 'Server error');
-}
-return data;
-})
-.then(data => {
-console.log('Receipt created, ref:', data.reference_number);
-window.location = '{{ route("receipts.index") }}';
-})
-.catch(err => {
-console.error('Receipt store failed:', err);
-alert(err.message);
-})
-.finally(() => {
-this.isSubmitting = false;
-});
-},
+        fetch('{{ route("receipts.store") }}', {
+          method: 'POST',
+          credentials: 'same-origin',          // ← ensures Laravel session cookie is sent
+          headers: {
+            'X-CSRF-TOKEN':   document.querySelector('meta[name="csrf-token"]').content,
+            'X-Requested-With':'XMLHttpRequest', // ← marks it as AJAX
+            'Accept':          'application/json', // ← says “I want JSON back”
+          },
+          body: fd,
+        })
+        .then(async response => {
+          const text = await response.text();
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            console.error('Expected JSON but got:', text);
+            throw new Error('Server returned HTML—check Laravel log for the real error.');
+          }
+          if (!response.ok) {
+            console.error('Error payload:', data);
+            throw new Error(data.error || 'Server error');
+          }
+          return data;
+        })
+       .then(data => {
+          // store a flash in localStorage
+          localStorage.setItem(
+            'receiptSuccess',
+            `Receipt generated: ${data.reference_number}`
+          );
+          // then redirect
+          window.location = '{{ route("receipts.index") }}';
+        })
+        .catch(err => {
+          console.error('Receipt store failed:', err);
+          alert(err.message);
+        })
+        .finally(() => {
+          this.isSubmitting = false;
+        });
+      }
+    }
+  }
 
-submit() {
-const fd = new FormData();
-['nin','name','email','phone','address','stateId','lgaId'].forEach(k=>
-fd.append(k.startsWith('state')||k.startsWith('lga')?`customer_${k}`:(
-k==='nin'?'customer_nin':k), this[k])
-);
-fd.append('business_id', this.businessId);
-fd.append('branch_id', this.branchId||'');
-this.selectedProducts.forEach(id=> fd.append('products[]', id));
-
-fetch('{{ route("receipts.store") }}', { method:'POST', body:fd })
-.then(r=> r.ok? r.json():Promise.reject(r))
-.then(()=> window.location='{{ route("receipts.index") }}')
-.catch(()=>alert('Error generating receipt.'));
-}
-}
-}
-
-document.addEventListener('alpine:init', ()=>{
-Alpine.data('receiptWizard', receiptWizard);
-});
+  document.addEventListener('alpine:init', () => {
+    Alpine.data('receiptWizard', receiptWizard);
+  });
 </script>
 @endpush

@@ -7,6 +7,7 @@ use App\Models\Wallet;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
 use Yajra\DataTables\Facades\DataTables;
+use Illuminate\Support\Facades\Log;
 use Yabacon\Paystack;
 
 class WalletController extends Controller
@@ -39,37 +40,66 @@ class WalletController extends Controller
             ->toJson();
     }
 
-    /** Initialize a Paystack transaction **/
+    /**
+     * Initialize a Paystack transaction
+     */
     public function initialize(Request $request)
     {
-        $request->validate(['amount' => 'required|numeric|min:1']);
+        $request->validate([
+            'amount' => 'required|numeric|min:1',
+        ]);
+
         $user = Auth::user();
-        $kobo = intval($request->amount * 100);
+        // Paystack wants kobo
+        $kobo = (int) ($request->amount * 100);
 
-        // Create your pending record
+        // 1) create pending record
         $wallet = Wallet::create([
-            'user_id'   => $user->id,
-            'amount'    => $request->amount,
-            'type'      => 'credit',
-            'status'    => 'pending',
+            'user_id'  => $user->id,
+            'amount'   => $request->amount,
+            'type'     => 'credit',
+            'status'   => 'pending',
+            'description' => 'Funding',
         ]);
 
-        // Initialize via the SDK
-        $paystack = app(Paystack::class);
-        $response = $paystack->transaction->initialize([
-            'amount'       => $kobo,
-            'email'        => $user->email,
-            'reference'    => $wallet->reference,
-            'callback_url' => route('wallet.callback'),
-        ]);
+        // 2) call Paystack
+        try {
+            /** @var Paystack $paystack */
+            $paystack = app(Paystack::class);
 
-        if (empty($response->status) || $response->status !== true) {
-            return response()->json(['message' => 'Could not initialize payment'], 500);
+            $response = $paystack->transaction->initialize([
+                'amount'       => $kobo,
+                'email'        => $user->email,
+                'reference'    => $wallet->reference,
+                'callback_url' => route('wallet.callback'),
+            ]);
+        } catch (ApiException $e) {
+            // something went wrong in the HTTP / SDK layer
+            Log::error('Paystack initialize failed', [
+                'user_id'   => $user->id,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Could not initialize payment: ' . $e->getMessage(),
+            ], 500);
         }
 
-        // Return everything your JS needs
+        // 3) check Paystack response itself
+        if (empty($response->status) || $response->status !== true) {
+            Log::error('Paystack initialize returned false status', [
+                'user_id'   => $user->id,
+                'response'  => $response,
+            ]);
+
+            return response()->json([
+                'message' => 'Could not initialize payment',
+            ], 500);
+        }
+
+        // 4) all good
         return response()->json([
-            'key'        => env('PAYSTACK_PUBLIC_KEY'),
+            'key'        => config('services.paystack.public_key'),
             'email'      => $user->email,
             'amount'     => $kobo,
             'reference'  => $wallet->reference,

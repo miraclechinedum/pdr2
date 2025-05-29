@@ -11,6 +11,9 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use Illuminate\Support\Str;
+use Spatie\Permission\Models\Role;
+use Illuminate\Validation\Rule;
+
 use Yajra\DataTables\Facades\DataTables;
 
 use App\Services\AuditService;
@@ -73,42 +76,63 @@ class MyProductsController extends Controller
     public function transferBatch(Request $request)
     {
         $data = $request->validate([
-            'new_owner_nin'    => ['required', 'digits:11'],
-            'customer_name'    => 'required|string',
-            'customer_email'   => ['required', 'email'],
-            'customer_phone'   => ['required', 'digits:11'],
-            'customer_address' => 'required|string',
-            'customer_state_id' => 'required|exists:states,id',
-            'customer_lga_id'  => 'required|exists:lgas,id',
-            'products'         => 'required|array|min:1',
-            'products.*'       => 'exists:products,id',
+            'new_owner_nin'      => ['required', 'digits:11'],
+            'customer_name'      => 'required|string',
+            'customer_email'     => ['required', 'email'],
+            'customer_phone'     => ['required', 'digits:11'],
+            'customer_address'   => 'required|string',
+            'customer_state_id'  => 'required|exists:states,id',
+            'customer_lga_id'    => 'required|exists:lgas,id',
+            'products'           => 'required|array|min:1',
+            'products.*'         => 'exists:products,id',
         ]);
 
-        Log::debug('TransferBatch payload', $data);
+        // 1) Lookup or create the customer exactly like ReceiptController@store
+        $existing = User::where('nin', $data['new_owner_nin'])->first();
+        if ($existing) {
+            // Validate minimal fields when updating an existing user
+            $request->validate([
+                'new_owner_nin'      => ['required', 'digits:11'],
+                'customer_name'      => 'required|string',
+                'customer_email'     => ['required', 'email'],
+                'customer_phone'     => ['required', 'digits:11'],
+                'customer_address'   => 'required|string',
+                'customer_state_id'  => 'required|exists:states,id',
+                'customer_lga_id'    => 'required|exists:lgas,id',
+            ]);
+            $customer = $existing;
+        } else {
+            // Validate uniqueness on creation
+            $request->validate([
+                'new_owner_nin'      => ['required', 'digits:11', Rule::unique('users', 'nin')],
+                'customer_name'      => 'required|string',
+                'customer_email'     => ['required', 'email', Rule::unique('users', 'email')],
+                'customer_phone'     => ['required', 'digits:11', Rule::unique('users', 'phone_number')],
+                'customer_address'   => 'required|string',
+                'customer_state_id'  => 'required|exists:states,id',
+                'customer_lga_id'    => 'required|exists:lgas,id',
+            ]);
 
-        // 1) find or create the new customer
-        $customer = User::firstOrCreate(
-            ['nin' => $data['new_owner_nin']],
-            [
+            // Prepare password and role_id
+            $plain = Str::random(12);
+            $role  = Role::findByName('Customer', 'web'); // or just Role::findByName('Customer')
+
+            $customer = User::create([
+                'nin'          => $data['new_owner_nin'],
                 'name'         => $data['customer_name'],
                 'email'        => $data['customer_email'],
                 'phone_number' => $data['customer_phone'],
                 'address'      => $data['customer_address'],
                 'state_id'     => $data['customer_state_id'],
                 'lga_id'       => $data['customer_lga_id'],
-                // generate a random password
-                'password'     => bcrypt($plain = Str::random(12)),
-            ]
-        );
+                'password'     => bcrypt($plain),
+                'role_id'      => $role->id,
+            ]);
 
-        // if newly created, assign role and email credentials
-        if ($customer->wasRecentlyCreated) {
+            // Assign Spatie role and email credentials
             $customer->assignRole('Customer');
-            // send credentials
             Mail::to($customer->email)
-                ->queue(new NewUserCredentials($customer, $plain));
-        } else {
-            $customer->assignRole('Customer');
+                ->send(new NewUserCredentials($customer, $plain));
         }
 
         // 2) mark old as transferred
@@ -135,10 +159,15 @@ class MyProductsController extends Controller
 
             AuditService::log(
                 'product_transferred',
-                Auth::user()->name
-                    . ' (' . Auth::user()->phone_number . ') transferred '
-                    . $p->name . ' (' . $p->unique_identifier . ') to '
-                    . $customer->name . ' (' . $customer->phone_number . ')'
+                sprintf(
+                    '%s (%s) transferred %s (%s) to %s (%s)',
+                    Auth::user()->name,
+                    Auth::user()->phone_number,
+                    $p->name,
+                    $p->unique_identifier,
+                    $customer->name,
+                    $customer->phone_number
+                )
             );
         }
 

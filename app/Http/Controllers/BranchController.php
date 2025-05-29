@@ -19,7 +19,15 @@ class BranchController extends Controller
 
     public function data()
     {
-        return DataTables::of(BusinessBranch::with(['business', 'state', 'lga']))
+        $query = BusinessBranch::with(['business', 'state', 'lga']);
+
+        if (auth()->user()->hasRole('Business Owner')) {
+            $query->whereHas('business', function ($q) {
+                $q->where('owner_id', auth()->id());
+            });
+        }
+
+        return DataTables::of($query)
             ->addColumn('business', fn($b) => $b->business->business_name)
             ->addColumn('state',    fn($b) => $b->state->name)
             ->addColumn('lga',      fn($b) => $b->lga->name)
@@ -34,8 +42,14 @@ class BranchController extends Controller
 
     public function create()
     {
-        $businesses = Business::pluck('business_name', 'id');
-        $states     = State::pluck('name', 'id');
+        if (auth()->user()->hasRole('Business Owner')) {
+            $businesses = Business::where('owner_id', auth()->id())->pluck('business_name', 'id');
+        } else {
+            $businesses = Business::pluck('business_name', 'id');
+        }
+
+        $states = State::pluck('name', 'id');
+
         return view('branches.create', compact('businesses', 'states'));
     }
 
@@ -65,9 +79,21 @@ class BranchController extends Controller
 
     public function edit(string $uuid)
     {
-        $branch     = BusinessBranch::where('uuid', $uuid)->firstOrFail();
-        $businesses = Business::pluck('business_name', 'id');
-        $states     = State::pluck('name', 'id');
+        $branch = BusinessBranch::where('uuid', $uuid)->firstOrFail();
+
+        if (auth()->user()->hasRole('Business Owner')) {
+            // Only allow access if the branch belongs to a business the user owns
+            if ($branch->business->owner_id !== auth()->id()) {
+                abort(403, 'Unauthorized access to this branch.');
+            }
+
+            $businesses = Business::where('owner_id', auth()->id())->pluck('business_name', 'id');
+        } else {
+            $businesses = Business::pluck('business_name', 'id');
+        }
+
+        $states = State::pluck('name', 'id');
+
         return view('branches.edit', compact('branch', 'businesses', 'states'));
     }
 

@@ -16,7 +16,8 @@ class Wallet extends Model
         'user_id',
         'amount',
         'type',
-        'status'
+        'status',
+        'description',
     ];
 
     protected static function booted()

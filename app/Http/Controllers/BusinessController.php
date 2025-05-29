@@ -18,7 +18,13 @@ class BusinessController extends Controller
 
     public function data()
     {
-        return DataTables::of(Business::with('owner'))
+        $query = Business::with('owner');
+
+        if (auth()->user()->hasRole('Business Owner')) {
+            $query->where('owner_id', auth()->id());
+        }
+
+        return DataTables::of($query)
             ->addColumn('owner', fn($b) => $b->owner->name)
             ->addColumn(
                 'actions',

@@ -37,26 +37,51 @@ class ReceiptController extends Controller
 
     public function data()
     {
-        $user = Auth::user();
-        $query = Receipt::with(['seller', 'customer']);
+        $user = Auth::user()->load('businessStaff');
+        $query = Receipt::with(['seller', 'customer'])->latest();
 
-        if ($user->hasRole('Admin')) {
-            // do nothing, show all
-        } elseif ($user->hasRole('Business')) {
-            $query->where('seller_id', $user->id);
+        if ($user->hasRole('Admin') || $user->hasRole('Police')) {
+            // See all receipts — no restriction
+        } elseif ($user->hasRole('Business Owner')) {
+            // Get all user-owned businesses
+            $businessIds = Business::where('owner_id', $user->id)->pluck('id');
+
+            // Get all receipts where seller is from user's businesses OR customer is the user
+            $query->where(function ($q) use ($businessIds, $user) {
+                $q->whereHas('products.product', function ($q2) use ($businessIds) {
+                    $q2->whereIn('business_id', $businessIds);
+                })->orWhere('customer_id', $user->id);
+            });
         } elseif ($user->hasRole('Business Staff')) {
-            $query->where('seller_id', $user->business_id);
+            $branchId = $user->businessStaff->branch_id ?? null;
+
+            $query->where(function ($q) use ($user, $branchId) {
+                $q->where(function ($sub) use ($user, $branchId) {
+                    $sub->where('seller_id', $user->id)
+                        ->whereHas('products.product', fn($p) => $p->where('branch_id', $branchId));
+                })->orWhere('customer_id', $user->id);
+            });
+        } else {
+            // Every other role: only show receipts where user is the customer
+            $query->where('customer_id', $user->id);
         }
 
         return DataTables::eloquent($query)
-            ->addColumn('reference', fn($r) => $r->reference_number)
-            ->addColumn('seller', fn($r) => optional($r->seller)->name ?? 'N/A')
-            ->addColumn('customer', fn($r) => optional($r->customer)->name ?? 'N/A')
-            ->addColumn('date', fn($r) => $r->created_at->format('Y-m-d'))
-            ->addColumn('actions', fn($r) => '...') // Your action buttons
-            ->rawColumns(['actions'])
+            ->addColumn('reference', function ($r) {
+                return '<a href="' . route('receipts.show', $r->uuid) . '" class="text-blue-600 hover:underline">'
+                    . $r->reference_number . '</a>';
+            })
+            ->addColumn('seller',    fn($r) => optional($r->seller)->name)
+            ->addColumn('customer',  fn($r) => optional($r->customer)->name)
+            ->addColumn('date',      fn($r) => $r->created_at->format('jS F, Y g:ia'))
+            ->filterColumn('reference', fn($q, $k) => $q->where('reference_number', 'like', "%{$k}%"))
+            ->filterColumn('seller',    fn($q, $k) => $q->whereHas('seller', fn($q2) => $q2->where('name', 'like', "%{$k}%")))
+            ->filterColumn('customer',  fn($q, $k) => $q->whereHas('customer', fn($q2) => $q2->where('name', 'like', "%{$k}%")))
+            ->filterColumn('date',      fn($q, $k) => $q->whereDate('created_at', $k))
+            ->rawColumns(['reference'])
             ->make(true);
     }
+
 
     public function show(Request $req, Receipt $receipt)
     {
@@ -87,16 +112,23 @@ class ReceiptController extends Controller
 
     public function create()
     {
-        $user = Auth::user()->load('businessStaff'); // now businessStaff is loaded
-        $businesses = Business::all();
-        // Eager-load whether there’s an active report, and whether it's ever been sold
+        $user = Auth::user()->load('businessStaff');
+
+        // Scope businesses by role:
+        if ($user->hasRole('Business Owner')) {
+            $businesses = Business::where('owner_id', $user->id)->get();
+        } elseif ($user->hasRole('Business Staff')) {
+            // only their assigned business
+            $businesses = Business::where('id', $user->businessStaff->business_id)->get();
+        } else {
+            // Admin, Police, etc
+            $businesses = Business::all();
+        }
+
+        // Eager-load reports/sold flags onto products
         $products = Product::select(['id', 'name', 'unique_identifier', 'business_id', 'branch_id'])
             ->withCount([
-                // count only active reports
-                'reportedProduct as reported_status' => function ($q) {
-                    $q->where('status', true);
-                },
-                // count how many times it appears in any receipt
+                'reportedProduct as reported_status' => fn($q) => $q->where('status', true),
                 'receiptProducts as sold_count'
             ])
             ->get()
@@ -109,145 +141,159 @@ class ReceiptController extends Controller
                 'reported'          => $p->reported_status > 0,
                 'sold'              => $p->sold_count > 0,
             ]);
+
         $allBranches = BusinessBranch::select(['id', 'branch_name'])->get();
-        return view('receipts.create', compact('businesses', 'products', 'user', 'allBranches'));
+
+        $fee = Pricing::where('slug', 'receipt-generation')
+            ->where('is_active', true)
+            ->firstOrFail()
+            ->amount;
+
+        return view('receipts.create', compact(
+            'businesses',
+            'products',
+            'user',
+            'allBranches',
+            'fee'
+        ));
     }
+
 
     public function store(Request $request)
     {
         Log::debug('ReceiptController@store payload', $request->all());
 
-        // 1) See if this NIN already exists
-        $existing = User::where('nin', $request->customer_nin)->first();
+        try {
+            // 1) Lookup or create customer
+            $existing = User::where('nin', $request->customer_nin)->first();
 
-        if ($existing) {
-            // 2a) If user exists, only validate the non-unique bits:
-            $request->validate([
-                'customer_nin'      => ['required', 'digits:11'],
-                'customer_name'     => 'required|string',
-                'customer_email'    => ['required', 'email'],       // no unique rule
-                'customer_phone'    => ['required', 'digits:11'],   // no unique rule
-                'customer_address'  => 'required|string',
-                'customer_state_id' => 'required|exists:states,id',
-                'customer_lga_id'   => 'required|exists:lgas,id',
-                'batches'           => 'required|array|min:1',
-                'batches.*.business_id' => 'required|exists:businesses,id',
-                'batches.*.branch_id'   => 'nullable|exists:business_branches,id',
-                'batches.*.products'    => 'required|array|min:1',
-                'batches.*.products.*'  => 'exists:products,id',
-            ]);
-
-            $customer = $existing;
-        } else {
-            // 2b) Otherwise it's a brand-new user: enforce uniqueness, then create
-            $request->validate([
-                'customer_nin'      => ['required', 'digits:11', Rule::unique('users', 'nin')],
-                'customer_name'     => 'required|string',
-                'customer_email'    => ['required', 'email', Rule::unique('users', 'email')],
-                'customer_phone'    => ['required', 'digits:11', Rule::unique('users', 'phone_number')],
-                'customer_address'  => 'required|string',
-                'customer_state_id' => 'required|exists:states,id',
-                'customer_lga_id'   => 'required|exists:lgas,id',
-                'batches'           => 'required|array|min:1',
-                'batches.*.business_id' => 'required|exists:businesses,id',
-                'batches.*.branch_id'   => 'nullable|exists:business_branches,id',
-                'batches.*.products'    => 'required|array|min:1',
-                'batches.*.products.*'  => 'exists:products,id',
-            ]);
-
-            // create the user
-            $customerRoleId = Role::findByName('Customer')->id;
-            // 1) Generate a random password
-            $plain = Str::random(12);
-            $customer = User::create([
-                'nin'          => $request->customer_nin,
-                'name'         => $request->customer_name,
-                'email'        => $request->customer_email,
-                'phone_number' => $request->customer_phone,
-                'address'      => $request->customer_address,
-                'state_id'     => $request->customer_state_id,
-                'lga_id'       => $request->customer_lga_id,
-                'password'     => bcrypt($plain),
-                'role_id'      => $customerRoleId,
-            ]);
-            $customer->assignRole('Customer');
-
-            // 4) Send the e-mail (you may want to queue this in production)
-            Mail::to($customer->email)
-                ->send(new NewUserCredentials($customer, $plain));
-        }
-
-        $pricing = Pricing::where('slug', 'receipt-generation')
-            ->where('is_active', true)
-            ->firstOrFail();
-
-        $fee = $pricing->amount; // 900.00 for example
-
-        // 2) Check seller’s wallet balance
-        $seller = Auth::user();
-        $totalCredit = $seller->wallets()
-            ->where('type', 'credit')
-            ->where('status', 'success')
-            ->sum('amount');
-        $totalDebit = $seller->wallets()
-            ->where('type', 'debit')
-            ->where('status', 'success')
-            ->sum('amount');
-
-        $balance = $totalCredit - $totalDebit;
-
-        if ($balance < $fee) {
-            // abort or return JSON error for insufficient funds
-            return back()->withErrors([
-                'wallet' => 'Insufficient wallet balance (need ₦' . number_format($fee, 2) . ')'
-            ]);
-        }
-
-        // 3) Deduct the fee immediately
-        Wallet::create([
-            'user_id'   => $seller->id,
-            'amount'    => $fee,
-            'type'      => 'debit',
-            'status'    => 'success',
-        ]);
-
-        Log::info("Deducted ₦{$fee} from user {$seller->id} for receipt generation");
-
-        // 3) Now create the receipt
-        $receipt = Receipt::create([
-            'customer_id' => $customer->id,
-            'seller_id'   => Auth::id(),
-        ]);
-
-        // 4) Attach products & audit‐log each sale
-        foreach ($request->batches as $batch) {
-            foreach ($batch['products'] as $prodId) {
-                ReceiptProduct::create([
-                    'receipt_id' => $receipt->id,
-                    'product_id' => $prodId,
-                    'quantity'   => 1,
+            if ($existing) {
+                $request->validate([
+                    'customer_nin'      => ['required', 'digits:11'],
+                    'customer_name'     => 'required|string',
+                    'customer_email'    => ['required', 'email'],
+                    'customer_phone'    => ['required', 'digits:11'],
+                    'customer_address'  => 'required|string',
+                    'customer_state_id' => 'required|exists:states,id',
+                    'customer_lga_id'   => 'required|exists:lgas,id',
+                    'batches'           => 'required|array|min:1',
+                    'batches.*.business_id' => 'required|exists:businesses,id',
+                    'batches.*.branch_id'   => 'nullable|exists:business_branches,id',
+                    'batches.*.products'    => 'required|array|min:1',
+                    'batches.*.products.*'  => 'exists:products,id',
                 ]);
-                $p = Product::findOrFail($prodId);
-                AuditService::log(
-                    'product_sold',
-                    Auth::user()->name
-                        . ' (' . Auth::user()->phone_number . ') sold '
-                        . $p->name . ' (' . $p->unique_identifier . ') to '
-                        . $customer->name . ' (' . $customer->phone_number . ')'
-                );
+                $customer = $existing;
+            } else {
+                $request->validate([
+                    'customer_nin'      => ['required', 'digits:11', Rule::unique('users', 'nin')],
+                    'customer_name'     => 'required|string',
+                    'customer_email'    => ['required', 'email', Rule::unique('users', 'email')],
+                    'customer_phone'    => ['required', 'digits:11', Rule::unique('users', 'phone_number')],
+                    'customer_address'  => 'required|string',
+                    'customer_state_id' => 'required|exists:states,id',
+                    'customer_lga_id'   => 'required|exists:lgas,id',
+                    'batches'           => 'required|array|min:1',
+                    'batches.*.business_id' => 'required|exists:businesses,id',
+                    'batches.*.branch_id'   => 'nullable|exists:business_branches,id',
+                    'batches.*.products'    => 'required|array|min:1',
+                    'batches.*.products.*'  => 'exists:products,id',
+                ]);
+
+                // create the new customer
+                $plain = Str::random(12);
+                $roleId = Role::findByName('Customer')->id;
+
+                $customer = User::create([
+                    'nin'          => $request->customer_nin,
+                    'name'         => $request->customer_name,
+                    'email'        => $request->customer_email,
+                    'phone_number' => $request->customer_phone,
+                    'address'      => $request->customer_address,
+                    'state_id'     => $request->customer_state_id,
+                    'lga_id'       => $request->customer_lga_id,
+                    'password'     => bcrypt($plain),
+                    'role_id'      => $roleId,
+                ]);
+                $customer->assignRole('Customer');
+                Mail::to($customer->email)
+                    ->send(new NewUserCredentials($customer, $plain));
             }
-        }
 
-        // 5) Return JSON or redirect
-        if ($request->wantsJson()) {
+            // 2) Calculate wallet balance
+            $fee    = Pricing::where('slug', 'receipt-generation')
+                ->where('is_active', true)
+                ->firstOrFail()
+                ->amount;
+            $seller = Auth::user();
+
+            $totalCredit = $seller->wallets()
+                ->where('status', 'success')
+                ->where('type', 'credit')
+                ->sum('amount');
+            $totalDebit  = $seller->wallets()
+                ->where('status', 'success')
+                ->where('type', 'debit')
+                ->sum('amount');
+
+            $balance = $totalCredit - $totalDebit;
+
+            if ($balance < $fee) {
+                $error = 'Insufficient balance (need ₦' . number_format($fee, 2) . ')';
+                return $request->ajax() || $request->expectsJson()
+                    ? response()->json(['error' => $error], 402)
+                    : back()->withErrors(['wallet' => $error]);
+            }
+
+            // Deduct fee
+            Wallet::create([
+                'user_id' => $seller->id,
+                'amount'  => $fee,
+                'type'    => 'debit',
+                'status'  => 'success',
+                'description' => 'Receipt Generation',
+            ]);
+
+            Log::info("Deducted ₦{$fee} from user {$seller->id} for receipt generation");
+
+            // 3) Create receipt and attach products
+            $receipt = Receipt::create([
+                'customer_id' => $customer->id,
+                'seller_id'   => $seller->id,
+            ]);
+
+            foreach ($request->batches as $batch) {
+                foreach ($batch['products'] as $pid) {
+                    ReceiptProduct::create([
+                        'receipt_id' => $receipt->id,
+                        'product_id' => $pid,
+                        'quantity'   => 1,
+                    ]);
+                    AuditService::log(
+                        'product_sold',
+                        "{$seller->name} sold product #{$pid} to {$customer->name}"
+                    );
+                }
+            }
+
+            // 4) Return JSON for AJAX or redirect for normal
+            if ($request->ajax() || $request->expectsJson()) {
+                return response()->json([
+                    'success'          => true,
+                    'reference_number' => $receipt->reference_number,
+                ], 201);
+            }
+
+            return redirect()
+                ->route('receipts.index')
+                ->with('success', 'Receipt generated: ' . $receipt->reference_number);
+        } catch (\Throwable $e) {
+            Log::error("ReceiptController@store failed: {$e->getMessage()}", [
+                'exception' => (string)$e,
+            ]);
+
             return response()->json([
-                'success'          => true,
-                'reference_number' => $receipt->reference_number,
-            ], 201);
+                'error' => $e->getMessage(),
+            ], 500);
         }
-
-        return redirect()
-            ->route('receipts.index')
-            ->with('success', 'Receipt generated: ' . $receipt->reference_number);
     }
 }

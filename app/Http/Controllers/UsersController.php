@@ -5,19 +5,21 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\State;
 use App\Models\Lga;
+use App\Models\Receipt;
 use App\Models\Business;
 use App\Models\BusinessBranch;
 use App\Models\BusinessStaffs;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
+use Spatie\Permission\PermissionRegistrar;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Auth;
 use Yajra\DataTables\Facades\DataTables;
-
 use Illuminate\Support\Str;
 use App\Mail\NewUserCredentials;
 use Illuminate\Support\Facades\Mail;
-
+use Carbon\Carbon;
 
 class UsersController extends Controller
 {
@@ -29,26 +31,42 @@ class UsersController extends Controller
 
     public function create()
     {
-        $states       = State::all();
-        $roles        = Role::whereNotIn('name', ['Admin', 'Customer'])->get();
-        $permissions  = Permission::all();
-        $businesses   = Business::all();
+        $auth = Auth::user();
 
-        // Build array: roleName => [permName, …]
-        $rolePermissions = $roles
-            ->mapWithKeys(fn($role) => [
-                $role->name => $role->permissions->pluck('name')->toArray()
-            ])->toArray();
+        // Base data
+        $states   = State::all();
+        $allRoles = Role::whereNotIn('name', ['Admin', 'Customer'])->get();
+        $allPerms = Permission::all();
+        $allBiz   = Business::all();
 
-        // Group permissions by category
-        $grouped = Permission::orderBy('category')
-            ->get()
-            ->groupBy('category');
+        if ($auth->hasRole('Business Owner')) {
+            // Only Business Staff role
+            $roles      = $allRoles->where('name', 'Business Staff');
+            // Only product‐related permissions
+            $perms      = $allPerms->whereIn('slug', [
+                'create-product',
+                'report-product',
+                'resolve-product-report',
+            ]);
+            // Only businesses owned by this user
+            $businesses = Business::where('owner_id', $auth->id)->get();
+        } else {
+            $roles      = $allRoles;
+            $perms      = $allPerms;
+            $businesses = $allBiz;
+        }
+
+        // JS map of role → permissions
+        $rolePermissions = $roles->mapWithKeys(fn($r) => [
+            $r->name => $r->permissions->pluck('name')->toArray(),
+        ]);
+
+        // Group for checkboxes
+        $grouped = $perms->groupBy('category');
 
         return view('users.create', compact(
             'states',
             'roles',
-            'permissions',
             'businesses',
             'rolePermissions',
             'grouped'
@@ -60,7 +78,7 @@ class UsersController extends Controller
         $data = $request->validate([
             'name'        => 'required|string',
             'email'       => 'required|email|unique:users',
-            'nin'          => 'required|string|unique:users,nin',
+            'nin'         => 'required|string|unique:users,nin',
             'phone_number' => 'required|string|unique:users,phone_number',
             'address'     => 'required|string',
             'state_id'    => 'required|exists:states,id',
@@ -71,26 +89,23 @@ class UsersController extends Controller
             'branch_id'   => 'nullable|exists:business_branches,id',
         ]);
 
-        // Find the Role to get its ID
-        $role = Role::where('name', $data['role'])->first();
+        $role  = Role::where('name', $data['role'])->first();
         $plain = Str::random(12);
 
         $user = User::create([
-            'name'     => $data['name'],
-            'email'    => $data['email'],
-            'nin'      => $data['nin'],
-            'phone_number'    => $data['phone_number'],
-            'address'  => $data['address'],
-            'state_id' => $data['state_id'],
-            'lga_id'   => $data['lga_id'],
-            'role_id'  => $role->id,
+            'name'         => $data['name'],
+            'email'        => $data['email'],
+            'nin'          => $data['nin'],
+            'phone_number' => $data['phone_number'],
+            'address'      => $data['address'],
+            'state_id'     => $data['state_id'],
+            'lga_id'       => $data['lga_id'],
+            'role_id'      => $role->id,
             'password'     => bcrypt($plain),
         ]);
 
-        // assign via spatie too, if you like
         $user->assignRole($role->name);
-        Mail::to($user->email)
-            ->send(new NewUserCredentials($user, $plain));
+        Mail::to($user->email)->send(new NewUserCredentials($user, $plain));
 
         if (!empty($data['permissions'])) {
             $user->givePermissionTo($data['permissions']);
@@ -99,9 +114,9 @@ class UsersController extends Controller
         if ($role->name === 'Business Staff') {
             DB::table('business_staffs')->insert([
                 'business_id' => $data['business_id'],
-                'user_id'    => $user->id,
-                'created_at' => now(),
-                'updated_at' => now(),
+                'user_id'     => $user->id,
+                'created_at'  => now(),
+                'updated_at'  => now(),
             ]);
         }
 
@@ -111,17 +126,59 @@ class UsersController extends Controller
 
     public function data(Request $request)
     {
+        $authUser = auth()->user();
+        $roleName = $authUser->getRoleNames()->first();
+
         $query = User::with('roles');
 
+        if (in_array($roleName, ['Admin', 'Police'])) {
+            $query->latest();
+        } elseif ($roleName === 'Business Owner') {
+            $businessId = Business::where('owner_id', $authUser->id)->value('id');
+
+            if ($businessId) {
+                $staffUserIds = BusinessStaffs::where('business_id', $businessId)
+                    ->pluck('user_id')->unique();
+
+                $ownerCustomerIds = Receipt::where('seller_id', $authUser->id)
+                    ->pluck('customer_id')->unique();
+
+                $staffCustomerIds = $staffUserIds->isNotEmpty()
+                    ? Receipt::whereIn('seller_id', $staffUserIds)
+                    ->pluck('customer_id')->unique()
+                    : collect();
+
+                $userIds = $staffUserIds
+                    ->merge($ownerCustomerIds)
+                    ->merge($staffCustomerIds)
+                    ->unique();
+
+                $query->when(
+                    $userIds->isNotEmpty(),
+                    fn($q) => $q->whereIn('id', $userIds),
+                    fn($q) => $q->whereNull('id')
+                );
+            } else {
+                $query->whereNull('id');
+            }
+        } elseif ($roleName === 'Business Staff') {
+            $custIds = Receipt::where('seller_id', $authUser->id)
+                ->pluck('customer_id')->unique();
+            $query->whereIn('id', $custIds);
+        } else {
+            $query->whereNull('id');
+        }
+
         return DataTables::of($query)
-            ->addColumn('role', fn(User $user) =>
-            $user->getRoleNames()->first() ?? '-')
-            ->addColumn('actions', function (User $user) {
-                $editBtn = '<a href="' . route('users.edit', $user) . '" '
-                    . 'class="px-2 py-1 bg-yellow-500 text-white rounded">Edit</a>';
-                $viewBtn = '<button data-uuid="' . $user->uuid . '" '
-                    . 'class="view-btn px-2 py-1 bg-blue-600 text-white rounded">'
-                    . 'View</button>';
+            ->addColumn('role', fn(User $u) => $u->getRoleNames()->first() ?? '-')
+            ->addColumn('date_created', fn(User $u) => Carbon::parse($u->created_at)->format('jS M, Y g:ia'))
+            ->addColumn('actions', function (User $u) use ($authUser) {
+                $viewerRole = $authUser->getRoleNames()->first();
+                $userRole   = $u->getRoleNames()->first();
+                $editBtn    = (!($viewerRole === 'Admin' && $userRole === 'Admin'))
+                    ? '<a href="' . route('users.edit', $u) . '" class="px-2 py-1 bg-yellow-500 text-white rounded">Edit</a>'
+                    : '';
+                $viewBtn = '<button data-uuid="' . $u->uuid . '" class="view-btn px-2 py-1 bg-blue-600 text-white rounded">View</button>';
                 return $editBtn . ' ' . $viewBtn;
             })
             ->rawColumns(['actions'])
@@ -135,34 +192,45 @@ class UsersController extends Controller
 
     public function getLgas($stateId)
     {
-        $lgas = Lga::where('state_id', $stateId)->get(['id', 'name']);
-        return response()->json($lgas);
+        return response()->json(Lga::where('state_id', $stateId)->get(['id', 'name']));
     }
 
     public function getBranches($businessId)
     {
-        $branches = BusinessBranch::where('business_id', $businessId)
-            ->get(['id', 'branch_name']);
-        return response()->json($branches);
+        return response()->json(
+            BusinessBranch::where('business_id', $businessId)
+                ->get(['id', 'branch_name'])
+        );
     }
 
     public function edit(User $user)
     {
-        $states       = State::all();
-        $roles        = Role::whereNotIn('name', ['Admin', 'Customer'])->get();
-        $businesses   = Business::all();
-        $grouped      = Permission::orderBy('category')->get()->groupBy('category');
+        $auth = Auth::user();
 
-        // role → default perms
-        $rolePermissions = $roles
-            ->mapWithKeys(fn($role) => [
-                $role->name => $role->permissions->pluck('name')->toArray()
-            ])->toArray();
+        $states   = State::all();
+        $allRoles = Role::whereNotIn('name', ['Admin', 'Customer'])->get();
+        $allPerms = Permission::all();
+        $allBiz   = Business::all();
 
-        // Group permissions by category
-        $grouped = Permission::orderBy('category')
-            ->get()
-            ->groupBy('category');
+        if ($auth->hasRole('Business Owner')) {
+            $roles      = $allRoles->where('name', 'Business Staff');
+            $perms      = $allPerms->whereIn('slug', [
+                'create-product',
+                'report-product',
+                'resolve-product-report'
+            ]);
+            $businesses = Business::where('owner_id', $auth->id)->get();
+        } else {
+            $roles      = $allRoles;
+            $perms      = $allPerms;
+            $businesses = $allBiz;
+        }
+
+        $rolePermissions = $roles->mapWithKeys(fn($r) => [
+            $r->name => $r->permissions->pluck('name')->toArray()
+        ]);
+
+        $grouped = $perms->groupBy('category');
 
         return view('users.edit', compact(
             'user',
@@ -190,56 +258,43 @@ class UsersController extends Controller
             'branch_id'      => 'nullable|exists:business_branches,id',
         ]);
 
-        // 1) Update the user’s core attributes
         $user->update([
-            'name'           => $data['name'],
-            'email'          => $data['email'],
-            'nin'            => $data['nin'],
-            'phone_number'   => $data['phone_number'],
-            'address'        => $data['address'],
-            'state_id'       => $data['state_id'],
-            'lga_id'         => $data['lga_id'],
+            'name'         => $data['name'],
+            'email'        => $data['email'],
+            'nin'          => $data['nin'],
+            'phone_number' => $data['phone_number'],
+            'address'      => $data['address'],
+            'state_id'     => $data['state_id'],
+            'lga_id'       => $data['lga_id'],
         ]);
 
-        // 2) Sync their role
         $user->syncRoles($data['role']);
-
-        // 3) Sync their permissions
         $user->syncPermissions($data['permissions'] ?? []);
 
-        // 4) Handle business_staffs pivot
         if ($data['role'] === 'Business Staff') {
-            // either update or create
             BusinessStaffs::updateOrCreate(
-                ['user_id'     => $user->id],
+                ['user_id' => $user->id],
                 [
                     'business_id' => $data['business_id'],
-                    'branch_id'   => $data['branch_id'],
+                    'branch_id'  => $data['branch_id'],
                 ]
             );
         } else {
-            // if they used to be a staff, remove that record
             BusinessStaffs::where('user_id', $user->id)->delete();
         }
 
-        return redirect()
-            ->route('users.index')
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+        return redirect()->route('users.index')
             ->with('success', 'User updated successfully.');
     }
 
-    /**
-     * Return a user by NIN as JSON, or an empty object.
-     */
     public function findByNin($nin)
     {
-        $user = User::where('nin', $nin)
+        $u = User::where('nin', $nin)
             ->select('id', 'name', 'email', 'phone_number', 'address', 'state_id', 'lga_id')
             ->first();
 
-        if (! $user) {
-            return response()->json([], 200);
-        }
-
-        return response()->json($user, 200);
+        return response()->json($u ? $u : []);
     }
 }

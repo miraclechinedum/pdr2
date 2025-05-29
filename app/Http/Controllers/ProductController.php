@@ -9,9 +9,12 @@ use App\Models\ProductCategory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Log;
 use Yajra\DataTables\Facades\DataTables;
 
 use App\Services\AuditService;
+use App\Imports\ProductsImport;
+use Maatwebsite\Excel\Facades\Excel;
 
 class ProductController extends Controller
 {
@@ -23,28 +26,70 @@ class ProductController extends Controller
 
     public function data()
     {
-        return DataTables::of(
-            Product::with(['business', 'branch', 'category', 'user', 'reportedProduct'])
-        )
+        $user  = Auth::user();
+        $roles = $user->getRoleNames()->toArray();
+        Log::debug('ProductController@data – current user roles: ' . implode(',', $roles));
+
+        // Start with a fresh Eloquent\Builder
+        $query = Product::with(['business', 'branch', 'category', 'user', 'reportedProduct'])
+            ->withCount('receiptProducts');
+
+        // 1) Admin & Police see everything
+        if ($user->hasRole('Admin') || $user->hasRole('Police')) {
+            // no additional where()
+        }
+        // 2) Business Owner sees only their businesses’ products
+        elseif ($user->hasRole('Business Owner')) {
+            $businessIds = Business::where('owner_id', $user->id)->pluck('id');
+            $query->whereIn('business_id', $businessIds);
+        }
+        // 3) Business Staff sees only their branch
+        elseif ($user->hasRole('Business Staff')) {
+            $branchId = optional($user->businessStaff)->branch_id;
+            $query->where('branch_id', $branchId);
+        }
+        // 4) Everyone else sees nothing
+        else {
+            $query->whereRaw('0 = 1');
+        }
+
+        return DataTables::eloquent($query)
             ->addColumn('business', fn($p) => $p->business->business_name)
             ->addColumn('branch',   fn($p) => $p->branch?->branch_name ?? '-')
             ->addColumn('category', fn($p) => $p->category->name)
             ->addColumn('owner',    fn($p) => $p->user->name)
-            // here’s the new flag:
             ->addColumn('reported_status', fn($p) => $p->reportedProduct ? true : false)
-            ->addColumn(
-                'actions',
-                fn($p) => '<a href="' . route('products.edit', $p->uuid)
-                    . '" class="px-2 py-1 bg-yellow-500 text-white rounded">Edit</a>'
-            )
+            ->addColumn('is_sold',          fn($p) => $p->receipt_products_count > 0)
+            ->addColumn('actions', function ($p) {
+                return '<a href="' . route('products.edit', $p->uuid)
+                    . '" class="px-2 py-1 bg-yellow-500 text-white rounded">Edit</a>';
+            })
             ->rawColumns(['actions'])
             ->make(true);
     }
 
+
     public function create()
     {
-        $businesses = Business::all();
+        $user = auth()->user();
         $categories = ProductCategory::all();
+
+        // Default empty collections
+        $businesses = collect();
+
+        if ($user->hasRole('Business Owner')) {
+            // Only businesses owned by this user
+            $businesses = Business::where('owner_id', $user->id)->with('branches')->get();
+        } elseif ($user->hasRole('Business Staff')) {
+            // Only the business and branch assigned to this user
+            $branch = optional($user->businessStaff)->branch;
+            if ($branch) {
+                $business = $branch->business;
+                $business->setRelation('branches', collect([$branch])); // limit to only their branch
+                $businesses = collect([$business]);
+            }
+        }
+
         return view('products.create', compact('businesses', 'categories'));
     }
 
@@ -118,21 +163,20 @@ class ProductController extends Controller
     /**
      * Return a single product as JSON for the modals.
      */
-    public function show(Product $product)
+    public function show(string $uuid)
     {
-        // eager‐load the branch relation
-        $product->load('branch');
+        $product = Product::with('branch')
+            ->where('uuid', $uuid)
+            ->firstOrFail();
 
         return response()->json([
+            'uuid'              => $product->uuid,
             'id'                => $product->id,
             'name'              => $product->name,
             'unique_identifier' => $product->unique_identifier,
             'business_id'       => $product->business_id,
             'branch_id'         => $product->branch_id,
-            // if there's a branch, return its address; otherwise null
-            'branch_name'       => $product->branch
-                ? $product->branch->branch_name
-                : null,
+            'branch_name'       => optional($product->branch)->branch_name,
         ]);
     }
 
@@ -216,11 +260,46 @@ class ProductController extends Controller
             'new_branch_id' => 'required|exists:business_branches,id',
         ]);
 
-        // assume Product has branch_id on it:
-        $product->update([
-            'branch_id' => $data['new_branch_id'],
-        ]);
+        // Manually assign & save:
+        $product->branch_id = $data['new_branch_id'];
+        $product->save();
 
         return response()->json(['message' => 'Transferred successfully']);
+    }
+
+    public function uploadForm()
+    {
+        $businesses = Business::where('owner_id', auth()->id())->get();
+        $categories = ProductCategory::all(); // You may later scope this if needed
+
+        return view('products.upload', compact('businesses', 'categories'));
+    }
+
+    public function upload(Request $request)
+    {
+        $request->validate([
+            'file'        => 'required|mimes:csv,xlsx|max:20480',
+            'business_id' => 'required|exists:businesses,id',
+            'branch_id'   => 'required|exists:business_branches,id',
+            'category_id' => 'required|exists:product_categories,id',
+        ]);
+
+        // confirm the user actually owns that business & branch
+        $business = Business::where('id', $request->business_id)
+            ->where('owner_id', auth()->id())
+            ->firstOrFail();
+        $branch = $business->branches()->where('id', $request->branch_id)->firstOrFail();
+
+        $import = new ProductsImport(
+            $request->category_id,
+            $business->id,
+            $branch->id,
+            auth()->id()
+        );
+
+        // synchronous import
+        Excel::import($import, $request->file('file'));
+
+        return redirect()->back()->with('success', 'Products imported successfully.');
     }
 }

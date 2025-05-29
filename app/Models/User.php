@@ -131,8 +131,8 @@ class User extends Authenticatable
         return $this->hasMany(Business::class, 'owner_id');
     }
 
-    public function hasRole($role)
-    {
-        return $this->roles->pluck('name')->contains($role);
-    }
+    // public function hasRole($role)
+    // {
+    //     return $this->roles->pluck('name')->contains($role);
+    // }
 }

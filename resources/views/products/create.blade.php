@@ -2,8 +2,13 @@
 
 @section('content')
 <div class="flex justify-between mb-6 bg-white p-6 rounded-lg">
-    <h1 class="text-2xl font-bold">Add New Product</h1>
+    <h1 class="text-2xl font-bold">Add New Products</h1>
+    <div class="space-x-2">
+        <a href="{{ route('products.upload.form') }}" class="px-4 py-2 bg-indigo-600 text-white rounded">Upload
+            Products</a>
+    </div>
 </div>
+
 
 @if($errors->any())
 <div class="mb-4 p-3 bg-red-50 text-red-700 rounded">

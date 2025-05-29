@@ -28,6 +28,14 @@ class Product extends Model
         });
     }
 
+    /**
+     * Use the `uuid` column for route‐model binding.
+     */
+    public function getRouteKeyName()
+    {
+        return 'uuid';
+    }
+
     public function business()
     {
         return $this->belongsTo(Business::class);
@@ -49,7 +57,7 @@ class Product extends Model
      */
     public function receiptProducts()
     {
-        return $this->hasMany(ReceiptProduct::class);
+        return $this->hasMany(ReceiptProduct::class, 'product_id');
     }
 
     /**

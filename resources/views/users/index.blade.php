@@ -24,6 +24,7 @@
         <th>Email</th>
         <th>Phone</th>
         <th>Role</th>
+        {{-- <th>Date</th> --}}
         <th>Actions</th>
       </tr>
     </thead>
@@ -64,6 +65,7 @@
       { data: 'email', name: 'email' },
       { data: 'phone_number', name: 'phone_number' },
       { data: 'role', name: 'role', orderable: false, searchable: false },
+      // { data: 'date_created', name: 'date_created' },
       { data: 'actions', name: 'actions', orderable: false, searchable: false },
     ],
     order: [[1, 'asc']],
@@ -84,28 +86,37 @@
   );
 
   $('#users-table').on('click', '.view-btn', function() {
-    const userId = this.dataset.id;
-    modal.classList.remove('hidden');
-    modalBody.innerHTML = '<p class="text-gray-600">Loading…</p>';
+  const uuid = this.dataset.uuid;
+  modal.classList.remove('hidden');
+  modalBody.innerHTML = '<p class="text-gray-600">Loading…</p>';
 
-    fetch(`/users/${userId}/permissions`)
-      .then(r => r.json())
-      .then(perms => {
-        if (!perms.length) {
-          return modalBody.innerHTML =
-            '<p class="text-gray-600">No permissions assigned.</p>';
-        }
+  fetch(`/users/${uuid}/permissions`)
+    .then(r => {
+      if (!r.ok) throw new Error('Failed to load permissions');
+      return r.json();
+    })
+    .then(perms => {
+      if (!perms.length) {
+        modalBody.innerHTML =
+          '<p class="text-gray-600">No permissions assigned.</p>';
+      } else {
         const ul = document.createElement('ul');
         ul.className = 'list-disc list-inside space-y-1';
-        perms.forEach(p => {
-          const li = document.createElement('li');
-          li.textContent = p;
-          ul.append(li);
-        });
+       perms.forEach(p => {
+        const li = document.createElement('li');
+        li.textContent = p;
+        li.classList.add('list-disc', 'list-inside', 'capitalize');
+        ul.append(li);
+       });
         modalBody.innerHTML = '';
         modalBody.appendChild(ul);
-      });
-  });
+      }
+    })
+    .catch(() => {
+      modalBody.innerHTML =
+        '<p class="text-red-600">Could not load permissions. Please try again.</p>';
+    });
+});
 });
 </script>
 @endpush

@@ -111,7 +111,7 @@
         list.forEach(b=>{
           opts += `<option value="${b.id}"
             ${b.id == "{{ old('branch_id', $product->branch_id) }}" ? 'selected' : ''}>
-            ${b.address}
+            ${b.branch_name}
           </option>`;
         });
         $('#branch-select').html(opts);
