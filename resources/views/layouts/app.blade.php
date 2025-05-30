@@ -99,19 +99,22 @@
                     </button>
 
                     <div x-show="open" x-collapse class="space-y-1 pl-6">
-                        @can('create-product')
+                        @hasanyrole('Business Owner|Business Staff')
+                        {{-- @can('create-product') --}}
                         {{-- Add Product --}}
                         <a href="{{ route('products.create') }}"
                             class="block py-2 px-3 rounded transition {{ request()->routeIs('products.create') ? 'bg-gray-700 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
                             Add Product
                         </a>
 
+
                         {{-- All Products --}}
                         <a href="{{ route('products.index') }}"
                             class="block py-2 px-3 rounded transition {{ request()->routeIs('products.index') ? 'bg-gray-700 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
                             All Products
                         </a>
-                        @endcan
+                        {{-- @endcan --}}
+                        @endhasanyrole
 
                         {{-- Add Product Category (Admin only) --}}
                         @role('Admin')
@@ -121,11 +124,13 @@
                         </a>
                         @endrole
 
+                        @unlessrole('Admin')
                         {{-- My Products --}}
                         <a href="{{ route('products.my') }}"
                             class="block py-2 px-3 rounded transition {{ request()->routeIs('products.my') ? 'bg-gray-700 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
                             My Products
                         </a>
+                        @endunlessrole
                     </div>
                 </div>
 
@@ -151,14 +156,16 @@
 
                     <div x-show="open" x-collapse class="space-y-1 pl-6">
                         {{-- Admin & Police see all --}}
-                        @can('add-business')
+                        @hasanyrole('Admin|Police')
+                        {{-- @can('add-business') --}}
                         <a href="{{ route('businesses.create') }}" class="block py-2 px-3 rounded transition
                         {{ request()->routeIs('businesses.create')
                             ? 'bg-gray-700 text-white'
                             : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
                             Add Business
                         </a>
-                        @endcan
+                        {{-- @endcan --}}
+                        @endhasanyrole
 
                         {{-- All Businesses --}}
                         <a href="{{ route('businesses.index') }}" class="block py-2 px-3 rounded transition
@@ -228,6 +235,7 @@
                 </div>
                 @endrole
 
+                @unlessrole('Admin')
                 {{-- WALLET & PROFILE --}}
                 <a href="{{ route('wallet.index') }}"
                     class="block py-2 px-3 rounded transition {{ request()->routeIs('wallet.index') ? 'bg-gray-500 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
@@ -237,6 +245,7 @@
                     class="block py-2 px-3 rounded transition {{ request()->routeIs('profile.edit') ? 'bg-gray-500 text-white' : 'text-gray-200 hover:bg-gray-500 hover:text-white' }}">
                     Profile Settings
                 </a>
+                @endunlessrole
             </nav>
         </aside>
 
